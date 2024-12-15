@@ -1,0 +1,316 @@
+---
+title: "Diving Into Maldives"
+format: pptx
+editor: visual
+author: Chang Lu
+---
+
+```{r, include=FALSE}
+library(readr)
+library(wbstats)
+library(dplyr)
+library(ggplot2)
+library(tseries)
+library(forecast)
+library(gridExtra)
+```
+
+# Introduction to Maldives
+
+The Maldives, a jewel in the Indian Ocean, is an archipelago of 1,200 stunning islands scattered like pearls across turquoise waters. Known for its pristine white sandy beaches, crystal-clear lagoons, and vibrant coral reefs, the Maldives offers unparalleled natural beauty and tranquility. This tropical paradise is home to luxury overwater bungalows, thriving marine ecosystems, and a culture shaped by its maritime heritage.
+
+However, beneath its serene beauty lies a challenge – the Maldives is one of the most climate-vulnerable island nations, facing rising sea levels and environmental pressures. Its resilience and efforts toward sustainability and climate advocacy are as remarkable as its beauty.
+
+
+# Analysis on GDP of Maldives
+
+```{r, echo=FALSE}
+# Fetch data for Maldives
+maldives_data <- wb_data(
+  country = "MDV", 
+  indicator = c("SP.POP.TOTL",    # Total Population
+                "NY.GDP.MKTP.CD", # GDP (current US$)
+                "SP.DYN.LE00.IN", # Life Expectancy at birth
+                "VC.IHR.PSRC.P5"  # Intentional Homicide Rate
+  )
+)
+
+# Clean and rename columns for better readability
+maldives_data <- maldives_data %>%
+  select(-iso2c, -iso3c) %>%
+  rename(
+    GDP = NY.GDP.MKTP.CD,
+    Population = SP.POP.TOTL,
+    `Life Expectancy` = SP.DYN.LE00.IN,
+    `Intentional Homicide` = VC.IHR.PSRC.P5
+  )
+```
+
+## Create a line plot with a LOESS trend line
+
+```{r, echo=FALSE}
+# Filter out rows with missing or non-finite GDP values
+maldives_data_clean <- maldives_data %>%
+  filter(!is.na(GDP) & is.finite(GDP))
+
+# Plot cleaned data
+ggplot(maldives_data_clean, aes(x = date, y = GDP)) +
+  geom_line(color = "blue") +
+  geom_smooth(method = "loess", formula = y ~ x, se = FALSE, color = "red") +
+  labs(
+    title = "Maldives GDP Over Time",
+    x = "Year",
+    y = "Gross Domestic Product (USD)"
+  ) +
+  theme_minimal()
+```
+
+The graph shows how the Gross Domestic Product (GDP) of the Maldives has changed over time, with two components:
+
+1.	Blue Line: Represents the actual yearly GDP values for the Maldives.
+	
+2.	Red Line: A LOESS smooth line, showing the general trend in GDP growth over time.
+
+##  Results of ADF test of GDP
+
+```{r, warning=FALSE, echo=FALSE}
+adfresult <- adf.test(maldives_data_clean$GDP)
+print(adfresult)
+```
+
+Null Hypothesis: The time series has a unit root and is non-stationary.
+
+The p-value(0.99) is very high (greater than common significance levels like 0.05), which means we fail to reject the null hypothesis. In other words, the GDP time series is non-stationary. We have to do some transformations to make it sastisfy the assumption of time series model.
+
+## Next Steps to Handle Non-Stationarity
+
+```{r, echo=FALSE}
+# Apply first-order differencing to remove trends and make the series stationary:
+gdp_diff <- diff(maldives_data_clean$GDP, differences = 1)
+
+# Redo the ADF test
+adf.test(gdp_diff)
+
+# Plot again
+plot(gdp_diff, type = "l", main = "Differenced GDP Plot")
+```
+
+The p-value(0.147) is still larger than 0.05, indicating that we need more transformation.
+
+```{r, warning=FALSE, echo=FALSE}
+log_gdp <- log(maldives_data_clean$GDP)
+log_gdp_diff <- diff(log_gdp, differences = 1)
+adf.test(log_gdp_diff, alternative = "stationary")
+
+# Visualize the Stationary Series
+plot(log_gdp_diff, type = "l", main = "Log Differenced GDP", ylab = "Log Differenced GDP", xlab = "Index")
+```
+
+
+After the log-transformation, the result supports the conclusion that the series is stationary. We can now further our analysis.
+
+##  Modeling and Forecasting of the GDP
+
+```{r, echo=FALSE}
+par(mfrow = c(1, 2))  
+acf(log_gdp_diff, main = "ACF of Log Differenced GDP")
+pacf(log_gdp_diff, main = "PACF of Log Differenced GDP")
+par(mfrow = c(1, 1))
+```
+The combined pattern of the ACF and PACF suggests that the ARIMA(1,1,1) model is a good choice.
+
+
+
+```{r, echo=FALSE}
+# Fit ARIMA(1,1,1)
+arima_111 <- Arima(log_gdp_diff, order = c(1,1,1))
+summary(arima_111)
+
+# Check Residual Diagnostics
+checkresiduals(arima_111)
+```
+
+The null hypothesis of the Ljung-Box test is that the residuals are white noise (no significant autocorrelations). Due to p-value(0.3261) > 0.05 , we fail to reject the null hypothesis.
+
+The residuals behave like white noise, confirming that the ARIMA(1,1,1) model is a good fit.
+
+## Forecasting the GDP of next 10 years
+
+```{r, echo=FALSE}
+# Forecast the next 10 years
+gdp_forecast <- forecast(arima_111, h = 10)
+
+# Back-transform the forecast to the original GDP scale
+last_gdp <- tail(maldives_data_clean$GDP, 1)
+
+# Convert log-differenced forecast back to GDP
+gdp_forecast_original <- exp(cumsum(c(log(last_gdp), gdp_forecast$mean)))
+
+# Create a data frame for plotting
+forecast_years <- seq(max(maldives_data_clean$date) + 1, 
+                      by = 1, length.out = 10)  # Next 10 years
+forecast_df <- data.frame(
+  Year = forecast_years,
+  GDP = gdp_forecast_original[-1]  # Remove the first element (base GDP)
+)
+
+# Plot the Original GDP with Forecast
+ggplot() +
+  geom_line(data = maldives_data_clean, aes(x = date, y = GDP), color = "blue") +
+  geom_line(data = forecast_df, aes(x = Year, y = GDP), color = "red", linetype = "solid") +
+  labs(
+    title = "GDP Forecast for the Next 10 Years",
+    x = "Year",
+    y = "GDP (USD)"
+  ) +
+  theme_minimal()
+```
+
+According to the forecast line, the GDP of Maldives will increase in the next 10 years.
+
+
+# Comparison with Sri Lanka
+
+This part compares two South Asian island nations, Sri Lanka and the Maldives, focusing on four key indicators: GDP, population, life expectancy, and international homicide rates. Although both countries share geographic proximity as island nations in the Indian Ocean, they differ significantly in terms of population size, economic structure, and socio-economic development. By examining GDP growth, overall population, life expectancy trends, and safety indicators (homicide rates), this comparison provides insight into their progress, challenges, and unique pathways of development over time.
+
+## Comparison on GDP
+
+```{r, echo=FALSE}
+Srilankadata <- wb_data(
+  indicator = c("SP.POP.TOTL", "NY.GDP.MKTP.CD", "SP.DYN.LE00.IN", "VC.IHR.PSRC.P5"),
+  country = "LKA",  
+)
+
+Srilankadata <- Srilankadata %>%
+  select(-iso2c, -iso3c)
+
+colnames(Srilankadata)[colnames(Srilankadata) == "NY.GDP.MKTP.CD"] <- "GDP"
+colnames(Srilankadata)[colnames(Srilankadata) == "SP.POP.TOTL"] <- "Population"
+colnames(Srilankadata)[colnames(Srilankadata) == "SP.DYN.LE00.IN"] <- "Life Expectancy"
+colnames(Srilankadata)[colnames(Srilankadata) == "VC.IHR.PSRC.P5"] <- "Intentional Homicide"
+```
+
+```{r, echo=FALSE, warning=FALSE}
+combined_data <- bind_rows(Srilankadata, maldives_data_clean)
+
+gdp_plot <- ggplot(combined_data, aes(x = date, y = GDP, color = country)) +
+  geom_line(size = 1) +
+  labs(
+    title = "GDP Comparison",
+    x = "Year",
+    y = "GDP (USD)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+print(gdp_plot)
+```
+
+Sri Lanka has a larger and more established economy, showing exponential growth until recent disruptions.
+
+Maldives, although starting smaller, has demonstrated steady and robust economic growth, driven by its tourism industry.
+
+## Comparison on Population
+
+```{r, echo=FALSE, warning=FALSE}
+population_plot <- ggplot(combined_data, aes(x = date, y = Population, color = country)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Population Comparison",
+    x = "Year",
+    y = "Population"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+
+print(population_plot)
+```
+
+Sri Lanka’s Population is steady growing over the decades, reaching over 20 million by 2023. The larger population supports a diversified economy but also poses challenges for resource management.
+
+Maldives’ Population is consistently much smaller, with a gradual increase to just under 1 million. The smaller population aligns with its economic reliance on tourism and resource limitations as an archipelago.
+
+## Comparison on Life Expectancy
+
+```{r, warning=FALSE, echo=FALSE}
+ggplot(combined_data, aes(x = date, y = `Life Expectancy`, color = country)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Life Expectancy Comparison",
+    x = "Year",
+    y = "Life(in years)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+Sri Lanka has shown steady improvements, likely due to consistent investments in healthcare and education over decades.
+
+Maldives has demonstrated exceptional progress, closing the life expectancy gap and ultimately exceeding Sri Lanka. 
+
+
+## Comparison of Intentional Homicide
+
+```{r, warning=FALSE, echo=FALSE}
+ggplot(combined_data, aes(x = date, y = `Intentional Homicide`, color = country)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Homicides Comparison",
+    x = "Year",
+    y = "Number of Homicides(per 100000 people)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+For Sri Lanka: The higher initial rates may have been influenced by political instability or conflict-related violence during the late 20th century and the sharp decline suggests improvements in governance, peace, and law enforcement over the years.
+
+For Maldives: The low and stable homicide rates align with its small population and limited social unrest and the spike in recent years may warrant further investigation into potential causes, such as economic stresses, organized crime, or social disruptions.
+
+# Current Challenges of Maldives
+
+## Sea-Level Rise and Land Loss
+
+The Maldives, with over 80% of its land area less than 1 meter above sea level, is highly vulnerable to sea-level rise. 
+
+Studies indicate that by 2150, sea levels could rise by approximately 1.32 meter, potentially submerging significant portions of the Maldives.
+
+```{r, echo=FALSE}
+years <- seq(2020, 2150, by = 10)
+sea_level_rise <- c(0.1, 0.11, 0.17, 0.24, 0.32, 0.41, 0.51, 0.63, 0.76, 0.85, 0.97, 1.09, 1.21, 1.32)
+
+sea_level_data <- data.frame(years, sea_level_rise)
+
+ggplot(sea_level_data, aes(x = years, y = sea_level_rise)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "red", size = 2) +
+  labs(title = "Projected Sea-Level Rise in the Maldives (2020-2150)",
+       x = "Year",
+       y = "Sea-Level Rise (meters)") +
+  theme_minimal()
+```
+
+Explore the detailed projections for sea-level rise using the [NASA Sea Level Projection Tool](https://sealevel.nasa.gov/ipcc-ar6-sea-level-projection-tool?psmsl_id=1753&data_layer=scenario).
+
+
+## Coral Reef Bleaching
+
+The Maldives has experienced significant coral bleaching events, notably in 1998, 2016, and 2020, leading to substantial coral mortality.
+
+In 2016, over 60% of coral colonies were bleached, with some sites experiencing up to 90% bleaching. 
+
+```{r, echo=FALSE}
+years <- c(1998, 2016, 2020)
+bleaching_percentage <- c(90, 60, 70)
+
+bleaching_data <- data.frame(years, bleaching_percentage)
+
+ggplot(bleaching_data, aes(x = factor(years), y = bleaching_percentage)) +
+  geom_bar(stat = "identity", fill = "coral") +
+  labs(title = "Major Coral Bleaching Events in the Maldives",
+       x = "Year",
+       y = "Bleaching Percentage") +
+  theme_minimal()
+```
+
+Access real-time coral bleaching data for the Maldives using the [NOAA Coral Reef Watch Tool](https://coralreefwatch.noaa.gov/product/vs/gauges/maldives.php).
