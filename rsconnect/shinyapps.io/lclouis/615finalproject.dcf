@@ -1,0 +1,13 @@
+name: 615finalproject
+title: 615finalproject
+username: lclouis
+account: lclouis
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 13602983
+bundleId: 9525177
+url: https://lclouis.shinyapps.io/615finalproject/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: 615final.pdf|615final.qmd|DivingIntoMaldives.pptx|README.md
